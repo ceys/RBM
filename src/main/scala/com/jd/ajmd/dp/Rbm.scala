@@ -1,7 +1,6 @@
 package com.jd.ajmd.dp
 
 import org.apache.spark.{SparkContext, SparkConf, Logging}
-import scala.util.Random
 import org.apache.spark.SparkContext._
 import org.apache.spark.rdd.RDD
 import breeze.linalg._
@@ -19,7 +18,7 @@ class RbmModel (
 class RbmWithCD (
   nVisible: Int,
   nHidden: Int,
-  learningRate: Double) extends Serializable with Logging{
+  learningRate: Double) extends Serializable with Logging {
 
   // Initialize a weight matrix, of dimensions (num_visible x num_hidden),
   // sampled from uniform distribution.
@@ -30,6 +29,8 @@ class RbmWithCD (
    * Run RBM with parameters on an 2-dim Array containing input data.
    *
    * @param sc - spark context
+   *
+   *
    * @param data - input data
    * @param numIterations - max num of iterations
    * @param p - num of partitions
@@ -49,7 +50,7 @@ class RbmWithCD (
         Iterator.single(gradient)
       }).reduce(_+_)
 
-      weights -= (w / numData) * learningRate
+      weights += (w / numData) * learningRate
       globalWeights = sc.broadcast(weights)
 
       t += 1
@@ -62,21 +63,23 @@ class RbmWithCD (
 
     // Clamp to the data and sample from the hidden units.
     // breeze dose not support the operation of vector-matrix production. WTF!
-    val posHiddenActivations = dotProduct(input, weight)
+    // val posHiddenActivations = dotProduct(input, weight)
+    val posHiddenActivations = (weight.t * input).toDenseVector
     val posHiddenProbs = sigmoid(posHiddenActivations)
     val posHiddenStats = I((posHiddenProbs :> DenseVector.rand(nHidden+1)).toDenseVector)
 
     // Reconstruct the visible units and sample again from the hidden units.
-    val negVisibleActivations = dotProduct(posHiddenStats, weight.t)
+    val negVisibleActivations = (posHiddenStats.asDenseMatrix * weight.t).toDenseVector
     val negVisibleProbs = sigmoid(negVisibleActivations)
     // Fix the bias unit.
     negVisibleProbs(0) = 1.0
 
-    val negHiddenActivations = dotProduct(negVisibleProbs, weight)
+    val negHiddenActivations = (negVisibleProbs.asDenseMatrix * weight).toDenseVector
     val negHiddenProbs = sigmoid(negHiddenActivations)
 
-    println(input)
-    (input.t * posHiddenProbs - (negVisibleProbs.t * negHiddenProbs)).asDenseMatrix
+    // the sparseVector col vector cannot dot denseVector row vector. WTF!
+    //input.toDenseVector * posHiddenProbs.t - (negVisibleProbs * negHiddenProbs.t)
+    (posHiddenProbs.asDenseMatrix.t * input.t).t - (negVisibleProbs * negHiddenProbs.t)
   }
 
 
@@ -125,9 +128,9 @@ object Rbm {
     val conf = new SparkConf().setAppName("rbm").setMaster("local")
     val sc = new SparkContext(conf)
     val input = sc.parallelize(test, numParallel)
-    val m = train(sc, input, 10, 6, 2, 0.1, 1)
+    val m = train(sc, input, 1000, 6, 2, 0.1, 1)
     //val m = train(sc, input, 100, 784, 500, 0.1, 1, numParallel)
-    m.weights.foreachValue(println(_))
+    println(m.weights)
     //println {toArray.map(t => t.mkString(" ")).mkString("\n") }
   }
 
