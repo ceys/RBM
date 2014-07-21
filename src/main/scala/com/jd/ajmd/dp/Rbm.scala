@@ -8,6 +8,8 @@ import breeze.numerics._
 import breeze.linalg.operators._
 import breeze.stats.distributions._
 import scala.math.{log => mathLog}
+import scala.collection.mutable.HashMap
+import com.jd.ajmd.util.MathUtil
 
 /**
  * Created by zhengchen on 14-7-10.
@@ -22,7 +24,7 @@ class RbmModel (
 class RbmWithCD (
   nVisible: Int,
   nHidden: Int,
-  k: Int,
+  nRating: Int,
   learningRate: Double) extends Serializable with Logging {
 
   // Initialize a weight matrix, of dimensions (num_visible x num_hidden),
@@ -31,7 +33,7 @@ class RbmWithCD (
 
   val weights = new Array[Array[Array[Double]]](nVisible)
   val vbias = new Array[Array[Double]](nVisible)
-  val hbias = new Array[Array[Double]](nHidden)
+  val hbias = new Array[Double](nHidden)
 
   // TODO: use fastutil to replace map. http://fastutil.di.unimi.it/
   private def initWeightsAndBias(data: RDD[Map[(Int, Int), Int]]): Int = {
@@ -39,9 +41,9 @@ class RbmWithCD (
     val gau = new Gaussian(0.0, 0.01)
     for (i <- 0 until nVisible) {
       for (j <- 0 until nHidden) {
-        weights(i)(j) = Array.fill(k)(gau.sample())
+        weights(i)(j) = Array.fill(nRating)(gau.sample())
       }
-      vbias(i) = Array.fill(k)(0)
+      vbias(i) = Array.fill(nRating)(0)
     }
     // visible bias: log[p_i/(1-p_i)] where p_i is the proportion of training vector in which unit i is on.
     val pmap = data.flatMap(_.toSeq).countByKey()
@@ -49,7 +51,7 @@ class RbmWithCD (
     pmap.foreach( pair => vbias(pair._1._1)(pair._1._2) = mathLog(pair._2.toDouble/(total-pair._2)))
 
     // hidden bias: Not using a sparsity target.
-    for (j <- 0 until nHidden) hbias(j) = Array.fill(k)(0)
+    for (j <- 0 until nHidden) hbias(j) = 0.0
 
     total
   }
@@ -69,11 +71,13 @@ class RbmWithCD (
   def run(sc: SparkContext, data: RDD[Map[(Int, Int), Int]], numIterations: Int, p: Int): RbmModel = {
     val numData = initWeightsAndBias(data)
     var globalWeights = sc.broadcast(weights)
-    var globalGradient = sc.accumulable()
+    var globalHbias = sc.broadcast(hbias)
+    var globalVbias = sc.broadcast(vbias)
+    val globalGradient = sc.broadcast(new Array[Array[Array[Double]]](nVisible))
 
     for (t <- 1 to numIterations) {
       val w = data.mapPartitions(it => {
-        val gradient = computeGradient(it.next(), globalWeights.value)
+        val gradient = new Array[Array[Array[Double]]](nVisible)
         while (it.hasNext) {
           gradient += computeGradient(it.next(), globalWeights.value)
         }
@@ -87,65 +91,36 @@ class RbmWithCD (
     new RbmModel(weights)
   }
 
+  private def computeGradient(input: Map[(Int, Int), Int],
+                              hBias: Array[Double],
+                              vBias: Array[Array[Double]],
+                              weight: Array[Array[Array[Double]]],
+                              gradient: Array[Array[Array[Double]]]) = {
 
-  private def computeGradient(input: Map[(Int, Int), Int], weight: DenseMatrix[Double]): DenseMatrix[Double] = {
-
-    // Clamp to the data and sample from the hidden units.
-    // breeze dose not support the operation of vector-matrix production. WTF!
-    // val posHiddenActivations = dotProduct(input, weight)
-    val inputIndex = input.index
-
-    val posHiddenActivations = (weight.t * input).toDenseVector
-    val posHiddenProbs = sigmoid(posHiddenActivations)
-    val posHiddenStats = I((posHiddenProbs :> DenseVector.rand(nHidden+1)).toDenseVector)
-
-    // Reconstruct the visible units and sample again from the hidden units.
-
-    val builder = new VectorBuilder[Double](weight.rows)
-    for (i <- 0 until inputIndex.length) builder.add(inputIndex(i), weight(inputIndex(i), ::) * posHiddenStats)
-    val negVisibleActivations = builder.toSparseVector
-    //val negVisibleActivations = (posHiddenStats.asDenseMatrix * weight(inputIndex, ::).t).toDenseVector
-    println(negVisibleActivations)
-
-    builder.clear()
-    val it = negVisibleActivations.activeIterator
-    while (it.hasNext) {
-      val a = it.next()
-      builder.add(a._1, sigmoid(a._2))
+    val posHiddenActivations = hBias.clone()
+    for (j <- 0 until nHidden) {
+      input.foreach {
+        case(k, v) => posHiddenActivations(j) += v * weight(k._1)(j)(k._2)
+      }
     }
-    val negVisibleProbs = builder.toSparseVector()
-    //val negVisibleProbs = sigmoid(negVisibleActivations)
-    println(negVisibleProbs)
-    // Fix the bias unit.
-    negVisibleProbs(0) = 1.0
+    val posHiddenProbs = posHiddenActivations.map(sigmoid(_))
+    val posHiddenStates = posHiddenProbs.map(MathUtil.binomial(_))
 
-    val negHiddenActivations = DenseVector.zeros[Double](weights.cols)
-    for (i <- 0 until inputIndex.length) negHiddenActivations += weight(inputIndex(i), ::).t * negVisibleProbs(i)
-    //val negHiddenActivations = (negVisibleProbs * weight).toDenseVector
-    val negHiddenProbs = sigmoid(negHiddenActivations)
-
-    // the sparseVector col vector cannot dot denseVector row vector. WTF!
-    //input.toDenseVector * posHiddenProbs.t - (negVisibleProbs * negHiddenProbs.t)
-    println(posHiddenProbs)
-    println(input)
-    println(negHiddenProbs)
-    println(negVisibleProbs)
-    println(posHiddenProbs.asDenseMatrix.t * input.t)
-    println(negHiddenProbs.asDenseMatrix.t * negVisibleProbs.t)
-    (posHiddenProbs.asDenseMatrix.t * input.t - negHiddenProbs.asDenseMatrix.t * negVisibleProbs.t).t
-    //input * posHiddenProbs
-  }
-
-
-  private def dotProduct(vector: Vector[Double], matrix: DenseMatrix[Double]): DenseVector[Double] = {
-    val numHidden = matrix.cols
-    val result = new Array[Double](numHidden)
-    var a = 0
-    while (a < numHidden) {
-      result(a) = vector.dot(matrix(::, a))
-      a += 1
+    val negVisibleActivations = input.map{ case(k, v) => (k._1, vBias(k._1)) }
+    input.foreach {
+      case(k, v) => {
+        for (j <- 0 until nHidden) {
+          for (kr <- 0 until nRating) {
+            negVisibleActivations(k._1)(kr) += weight(k._1)(j)(kr) * posHiddenStates(j)
+          }
+        }
+      }
     }
-    new DenseVector[Double](result)
+    val negVisibleProbs = negVisibleActivations.map { case(k, v) => MathUtil.softMax(v) }
+    val negVisibleStats = negVisibleProbs.map { case(k, v) => MathUtil.}
+
+
+
   }
 
 }
