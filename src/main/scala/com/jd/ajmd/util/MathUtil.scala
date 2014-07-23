@@ -18,17 +18,16 @@ object MathUtil {
   }
 
 
-  def multinomial(pa: Array[Double]): Array[Int] = {
+  def multinomial(pa: Array[Double]): Int = {
     var sum = 0.0
     val cu = pa.map { a => sum += a; sum}
-    p = rand.nextDouble()
-    cu.map { a => if (a > p)}
-
+    val p = rand.nextDouble()
+    cu.indexWhere(cumDist => cumDist >= p)
   }
 
 
   def softMax(a: Array[Double]): Array[Double] = {
-    val total = a.sum
+    val total = a.map(exp(_)).sum
     a.map(exp(_)/total)
   }
 
