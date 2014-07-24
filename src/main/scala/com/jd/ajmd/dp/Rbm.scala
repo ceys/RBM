@@ -110,11 +110,11 @@ class RbmWithCD (
                               hbGradient: Array[Double],
                               vbGradient: Array[Array[Double]]) = {
 
-    val (posHiddenProbs, posHiddenStates) = run_hidden(input, weight, hBias)
+    val (posHiddenProbs, posHiddenStates) = runHidden(input, weight, hBias)
 
-    val (negVisibleProbs, negVisibleStats) = run_visible(input, weight, vBias, posHiddenStates)
+    val (negVisibleProbs, negVisibleStats) = runVisible(input, weight, vBias, posHiddenStates)
 
-    val (negHiddenProbs, negHiddenStates) = run_hidden(negVisibleStats, weight, hBias)
+    val (negHiddenProbs, negHiddenStates) = runHidden(negVisibleStats, weight, hBias)
 
     //println(negVisibleActivations.toArray.map(_._2).deep.mkString("\n"))
     //println(negVisibleProbs.toArray.map(_._2).deep.mkString("\n"))
@@ -141,7 +141,7 @@ class RbmWithCD (
   }
 
 
-  private def run_hidden(input: Map[(Int, Int), Int],
+  private def runHidden(input: Map[(Int, Int), Int],
                          weight: Array[Array[Array[Double]]],
                          hBias: Array[Double]): (Array[Double], Array[Int]) = {
     val posHiddenActivations = hBias.clone()
@@ -156,7 +156,7 @@ class RbmWithCD (
   }
 
 
-  private def run_visible(input: Map[(Int, Int), Int],
+  private def runVisible(input: Map[(Int, Int), Int],
                           weight: Array[Array[Array[Double]]],
                           vBias: Array[Array[Double]],
                           posHiddenStates: Array[Int]): (Map[Int, Array[Double]], Map[(Int, Int), Int]) = {
@@ -245,8 +245,8 @@ class RbmWithCD (
                           nData: Int): Double = {
     val tErr = data.map {
       input => {
-        val (posHiddenProbs, posHiddenStates) = run_hidden(input, weight, hBias)
-        val (negVisibleProbs, negVisibleStats) = run_visible(input, weight, vBias, posHiddenStates)
+        val (posHiddenProbs, posHiddenStates) = runHidden(input, weight, hBias)
+        val (negVisibleProbs, negVisibleStats) = runVisible(input, weight, vBias, posHiddenStates)
         var err = 0.0
         input.foreach {
           case(k, v) => {
@@ -289,17 +289,18 @@ object Rbm {
 
     import scala.io.Source
 
-    val test = Source.fromFile("data/sample_movielens_data.txt").getLines().map(_.split("::").map(_.toInt).toSeq).toSeq
+    val test = Source.fromFile("data/movielens.txt").getLines().map(_.split(" ").map(_.toInt).toSeq).toSeq
     val testArr = new ListBuffer[Map[(Int, Int), Int]]()
     var map = new HashMap[(Int, Int), Int]()
-    map.put((test(0)(1), test(0)(2)-1), 1)
+    map.put((test(0)(1)-1, test(0)(2)-1), 1)
     var i = 1
     while (i < test.length) {
       if (test(i)(0) != test(i-1)(0)) {
         testArr += map.toMap
         map = new HashMap[(Int, Int), Int]()
+        println(i)
       }
-      map.put((test(i)(1), test(i)(2)-1), 1)
+      map.put((test(i)(1)-1, test(i)(2)-1), 1)
       i += 1
     }
     testArr += map.toMap
@@ -309,7 +310,7 @@ object Rbm {
     val conf = new SparkConf().setAppName("rbm").setMaster("local")
     val sc = new SparkContext(conf)
     val input = sc.parallelize(testArr.toSeq, numParallel)
-    val m = train(sc, input, 500, 100, 50, 5, 0.01, 1)
+    val m = train(sc, input, 500, 1682, 50, 5, 0.01, 1)
     //val m = train(sc, input, 10, 784, 500, 0.1, 1, numParallel)
     //println(m.weights.deep.mkString("\n"))
     //println {toArray.map(t => t.mkString(" ")).mkString("\n") }
