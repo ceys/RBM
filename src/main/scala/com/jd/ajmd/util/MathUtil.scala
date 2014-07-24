@@ -22,7 +22,10 @@ object MathUtil {
     var sum = 0.0
     val cu = pa.map { a => sum += a; sum}
     val p = rand.nextDouble()
-    cu.indexWhere(cumDist => cumDist >= p)
+    val r = cu.indexWhere(cumDist => cumDist >= p)
+    //TODO: the sum of
+    if (r == -1) cu.length-1
+    else r
   }
 
 
