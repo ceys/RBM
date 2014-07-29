@@ -31,7 +31,17 @@ object MathUtil {
 
   def softMax(a: Array[Double]): Array[Double] = {
     val total = a.map(exp(_)).sum
-    a.map(exp(_)/total)
+    a.map {
+      x => val result = exp(x)/total; if(result.isNaN) println(x+ " " + total); result
+    }
+  }
+
+  def expectSoftMax(pa: Array[Double]): Double = {
+    var sum = 0.0
+    for (i <- 0 until pa.length) {
+      sum += i * pa(i)
+    }
+    sum
   }
 
 
