@@ -34,11 +34,11 @@ class RbmWithCD (
     for (i <- 0 until nVisible) {
       weights(i) = new Array[Array[Double]](nHidden)
       for (j <- 0 until nHidden) {
-        weights(i)(j) = Array.fill(nRating)(0.0)
-        //weights(i)(j) = Array.fill(nRating)(gau.sample()*0.1)
+        //weights(i)(j) = Array.fill(nRating)(0.0)
+        weights(i)(j) = Array.fill(nRating)(gau.sample())
       }
-      //vbias(i) = Array.fill(nRating)(gau.sample()*0.1)
-      vbias(i) = Array.fill(nRating)(0.0)
+      vbias(i) = Array.fill(nRating)(gau.sample())
+      //vbias(i) = Array.fill(nRating)(0.0)
     }
     //TODO: How to init the visible bias in cf-rbm?
     // visible bias: log[p_i/(1-p_i)] where p_i is the proportion of training vector in which unit i is on.
@@ -48,8 +48,6 @@ class RbmWithCD (
 
     // hidden bias: Not using a sparsity target.
     for (j <- 0 until nHidden) hbias(j) = 0.0
-
-    //println(hbias.deep.mkString("\n"))
     data.count().toInt
   }
 
@@ -70,7 +68,6 @@ class RbmWithCD (
     var globalWeights = sc.broadcast(weights)
     var globalHbias = sc.broadcast(hbias)
     var globalVbias = sc.broadcast(vbias)
-
     // "Restricted Boltzmann Machines for Collaborative Filtering" 2
     // The full gradients with respect to the shared weight parameters can then be obtained by averaging over all N users.
     // TODO: What`s the meaning of averaging?
@@ -79,6 +76,7 @@ class RbmWithCD (
     val rmseArr = new ArrayBuffer[Double](numIterations)
     var t = 1
     while (t <= numIterations) {
+      //val w = data.sample(0.01).mapPartitions(it => {
       val w = data.mapPartitions(it => {
         //TODO: replace the gradient init in partition by using accumulable or something else?
         val gradient = Array.fill(nVisible, nHidden, nRating)(0.0)
@@ -98,30 +96,28 @@ class RbmWithCD (
       globalVbias = sc.broadcast(vbias)
 
       if ((t-1) % 10 == 0) {
-        rmseArr.append(computeRmse(data, nData))
-        println(rmseArr((t-1)/10))
+        rmseArr.append(computeRmse(data, globalWeights.value, globalVbias.value, globalHbias.value, nData))
+        println("TRAIN RMSE: "+rmseArr((t-1)/10))
       }
-
-      //if (t > 20) rmseArr.append(computeRmse(data, nData))
       t += 1
     }
-    rmseArr.append(computeRmse(data, nData))
+    rmseArr.append(computeRmse(data, globalWeights.value, globalVbias.value, globalHbias.value, nData))
     println(rmseArr.mkString("\n"))
     this
   }
 
 
   private def computeGradient(input: Map[Int, Int],
-                              hBias: Array[Double],
-                              vBias: Array[Array[Double]],
+                              hBia: Array[Double],
+                              vBia: Array[Array[Double]],
                               weight: Array[Array[Array[Double]]],
                               gradient: Array[Array[Array[Double]]],
                               hbGradient: Array[Double],
                               vbGradient: Array[Array[Double]]) = {
 
-    val (posHiddenProbs, posHiddenStates) = runHidden(input, weight, hBias)
-    val (negVisibleProbs, negVisibleStats) = runVisible(input, weight, vBias, posHiddenStates)
-    val (negHiddenProbs, negHiddenStates) = runHidden(negVisibleStats, weight, hBias)
+    val (posHiddenProbs, posHiddenStates) = runHidden(input, weight, hBia)
+    val (negVisibleProbs, negVisibleStats) = runVisible(input, weight, vBia, posHiddenStates)
+    val (negHiddenProbs, negHiddenStates) = runHidden(negVisibleStats, weight, hBia)
 
     input.foreach {
       case(k, v) => {
@@ -146,8 +142,8 @@ class RbmWithCD (
 
   private def runHidden(input: Map[Int, Int],
                          weight: Array[Array[Array[Double]]],
-                         hBias: Array[Double]): (Array[Double], Array[Int]) = {
-    val posHiddenActivations = hBias.clone()
+                         hBia: Array[Double]): (Array[Double], Array[Int]) = {
+    val posHiddenActivations = hBia.clone()
     for (j <- 0 until nHidden) {
       input.foreach {
         case(k, v) => {
@@ -163,9 +159,9 @@ class RbmWithCD (
 
   private def runVisible(input: Map[Int, Int],
                           weight: Array[Array[Array[Double]]],
-                          vBias: Array[Array[Double]],
+                          vBia: Array[Array[Double]],
                           posHiddenStates: Array[Int]): (Map[Int, Array[Double]], Map[Int, Int]) = {
-    val negVisibleActivations = input.map{ case(k, v) => (k, vBias(k)) }.toMap
+    val negVisibleActivations = input.map{ case(k, v) => (k, vBia(k).clone()) }.toMap
     input.foreach {
       case(k, v) => {
         for (j <- 0 until nHidden) {
@@ -177,8 +173,6 @@ class RbmWithCD (
     }
     val negVisibleProbs = negVisibleActivations.map { case(k, v) => (k ,MathUtil.softMax(v)) }.toMap
     val negVisibleStats = negVisibleProbs.map { case(k, v) => (k, MathUtil.multinomial(v))}.toMap
-    println(negVisibleProbs.toArray.map(_._2).deep.mkString(","))
-    println(negVisibleStats.toArray.deep.mkString(" "))
     (negVisibleProbs, negVisibleStats)
   }
 
@@ -195,18 +189,16 @@ class RbmWithCD (
     for (j <- 0 until nHidden) {
       for (i <- 0 until nVisible) {
         for (k <- 0 until nRating) {
-          //if(cw.contains(i))
-          //  weights(i)(j)(k) += thisIterStepSize * (wg(i)(j)(k)/cw(i))
-          weights(i)(j)(k) += thisIterStepSize * (wg(i)(j)(k)/numData)
+          if(cw.contains(i))
+            weights(i)(j)(k) += thisIterStepSize * (wg(i)(j)(k)/cw(i))
         }
       }
       hbias(j) += thisIterStepSize * (hbg(j)/numData)
     }
     for (i <- 0 until nVisible) {
       for (k <- 0 until nRating) {
-        vbias(i)(k) += thisIterStepSize * (vbg(i)(k)/numData)
-        //if(cw.contains(i))
-        //  vbias(i)(k) += thisIterStepSize * (vbg(i)(k)/cw(i))
+        if(cw.contains(i))
+          vbias(i)(k) += thisIterStepSize * (vbg(i)(k)/cw(i))
       }
     }
   }
@@ -251,17 +243,20 @@ class RbmWithCD (
 
 
   def computeRmse(data: RDD[Map[Int, Int]],
+                  weight: Array[Array[Array[Double]]],
+                  vBia: Array[Array[Double]],
+                  hBia: Array[Double],
                   nData: Int): Double = {
     val tErr = data.map {
       input => {
-        val (posHiddenProbs, posHiddenStates) = runHidden(input, weights, hbias)
-        val (negVisibleProbs, negVisibleStats) = runVisible(input, weights, vbias, posHiddenStates)
+        val (posHiddenProbs, posHiddenStates) = runHidden(input, weight, hBia)
+        val (negVisibleProbs, negVisibleStats) = runVisible(input, weight, vBia, posHiddenStates)
         var err = 0.0
         input.foreach {
           case(k, v) => {
             val a = negVisibleProbs(k)
             val predict = MathUtil.expectSoftMax(a)
-            println(v+" "+predict)
+            //println(v+" "+predict)
             err += pow(v-predict, 2)
           }
         }
@@ -271,11 +266,15 @@ class RbmWithCD (
     math.sqrt(tErr/nData)
   }
 
-  def predict(train: RDD[(Int, Map[Int, Int])], test: RDD[(Int, Map[Int, Int])], nData: Int): Double = {
+  def predict(train: RDD[(Int, Map[Int, Int])], test: RDD[(Int, Map[Int, Int])],
+              weight: Array[Array[Array[Double]]],
+              vBia: Array[Array[Double]],
+              hBia: Array[Double],
+              nData: Int): Double = {
     val tErr = train.join(test).map {
       case(k, (trn, tst)) => {
-        val (posHiddenProbs, posHiddenStates) = runHidden(trn, weights, hbias)
-        val (negVisibleProbs, negVisibleStats) = runVisible(tst, weights, vbias, posHiddenStates)
+        val (posHiddenProbs, posHiddenStates) = runHidden(trn, weight, hBia)
+        val (negVisibleProbs, negVisibleStats) = runVisible(tst, weight, vBia, posHiddenStates)
         var err = 0.0
         tst.foreach {
           case(k, v) => {
@@ -323,23 +322,25 @@ object Rbm {
 
     val conf = new SparkConf().setAppName("rbm").setMaster("local")
     val sc = new SparkContext(conf)
-    //val trainData = sc.textFile("file://d:/Work/RBM/data/train.txt").cache()
-    val trainData = sc.textFile("file://d:/Work/RBM/data/train_toy.txt").cache()
+    val trainData = sc.textFile("file://d:/Work/RBM/data/train.txt").cache()
+    //val trainData = sc.textFile("file://d:/Work/RBM/data/train_toy.txt").cache()
     val trainSize = trainData.count().toInt
     val itemSize = trainData.map(_.split(" ")(1)).distinct().count().toInt
     val trainInput = loadData(trainData).map(_._2).cache()
     trainData.unpersist()
 
     val numParallel = 1
-    val model = train(sc, trainInput, 1000, itemSize, 2, 5, 0.01, trainSize, numParallel)
-    println(model.weights.deep.mkString(","))
-    println(model.vbias.deep.mkString(","))
-    println(model.hbias.mkString(","))
-    /*val model = train(sc, trainInput, 200, 1682, 50, 5, 0.001, trainSize, numParallel)
+    //val model = train(sc, trainInput, 1, itemSize, 2, 5, 0.01, trainSize, numParallel)
+    val model = train(sc, trainInput, 200, 1682, 50, 5, 0.1, trainSize, numParallel)
 
     val testData = sc.textFile("file://d:/Work/RBM/data/test.txt").cache()
     val testSize = testData.count().toInt
-    println("TEST RMSE: " + model.predict(loadData(trainData), loadData(testData), testSize))*/
+    val gWeights = sc.broadcast(model.weights)
+    val gVbias = sc.broadcast(model.vbias)
+    val gHbias = sc.broadcast(model.hbias)
+    println("TEST RMSE: " + model.predict(loadData(trainData), loadData(testData),
+      gWeights.value, gVbias.value, gHbias.value, testSize))
+
   }
 
 }
