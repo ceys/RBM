@@ -86,7 +86,7 @@
         <scala.binary.version>2.10</scala.binary.version>
         <scala.version>2.10.4</scala.version>
         <hadoop.version>2.2.0</hadoop.version>
-        <spark.version>1.0.0</spark.version>
+        <spark.version>1.0.1</spark.version>
     </properties>
 
 </project>
