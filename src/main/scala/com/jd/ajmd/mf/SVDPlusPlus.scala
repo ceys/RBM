@@ -204,7 +204,7 @@ object SVDPlusPlus {
 
     def run(params: Params) {
       val conf = new SparkConf().setAppName(s"Svd++ with $params")
-        .setMaster(params.master)
+        //.setMaster(params.master)
       val sc = new SparkContext(conf)
 
       val edges = sc.textFile(params.input).map { line =>
