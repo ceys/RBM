@@ -106,7 +106,7 @@ object Als {
     Logger.getRootLogger.setLevel(Level.WARN)
 
     val ratings = sc.textFile(params.input).map { line =>
-      val fields = line.split(" ")
+      val fields = line.split("\t")
       if (params.implicitPrefs) {
         Rating(fields(0).toInt, fields(1).toInt, fields(2).toDouble)
       } else {

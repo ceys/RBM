@@ -8,7 +8,6 @@ import org.jblas.DoubleMatrix
 import org.apache.spark.rdd._
 import org.apache.spark.graphx._
 import org.apache.spark.{SparkContext, SparkConf}
-import org.apache.spark.serializer.KryoSerializer
 import scopt.OptionParser
 
 /** Implementation of SVD++ algorithm. */
@@ -147,42 +146,53 @@ object SVDPlusPlus {
   }
 
   case class Params(
-                     rank: Int,
-                     maxIters: Int,
-                     minVal: Double,
-                     maxVal: Double,
-                     gamma1: Double,
-                     gamma2: Double,
-                     gamma6: Double,
-                     gamma7: Double)
+                     rank: Int = 10,
+                     maxIters: Int = 10,
+                     input: String= null,
+                     minVal: Double = 0.0,
+                     maxVal: Double = 5.0,
+                     gamma1: Double = 0.007,
+                     gamma2: Double = 0.007,
+                     gamma6: Double = 0.005,
+                     gamma7: Double = 0.015,
+                     master: String = "yarn-cluster")
 
   def main(args: Array[String]) {
-/*
+
     val defaultParams = Params()
 
-    val parser = new OptionParser[Params]("MovieLensALS") {
-      head("MovieLensALS: an example app for ALS on MovieLens data.")
+    val parser = new OptionParser[Params]("svd++") {
+      head("svd++.")
       opt[Int]("rank")
         .text(s"rank, default: ${defaultParams.rank}}")
         .action((x, c) => c.copy(rank = x))
       opt[Int]("numIterations")
-        .text(s"number of iterations, default: ${defaultParams.numIterations}")
-        .action((x, c) => c.copy(numIterations = x))
-      opt[Double]("lambda")
-        .text(s"lambda (smoothing constant), default: ${defaultParams.lambda}")
-        .action((x, c) => c.copy(lambda = x))
-      opt[Unit]("kryo")
-        .text(s"use Kryo serialization")
-        .action((_, c) => c.copy(kryo = true))
-      opt[Unit]("implicitPrefs")
-        .text("use implicit preference")
-        .action((_, c) => c.copy(implicitPrefs = true))
+        .text(s"number of iterations, default: ${defaultParams.maxIters}")
+        .action((x, c) => c.copy(maxIters = x))
+      opt[Int]("minVal")
+        .text(s"minVal, default: ${defaultParams.minVal}")
+        .action((x, c) => c.copy(minVal = x))
+      opt[Int]("maxVal")
+        .text(s"maxVal, default: ${defaultParams.maxVal}")
+        .action((x, c) => c.copy(maxVal = x))
+      opt[Int]("gamma1")
+        .text(s"gamma1, default: ${defaultParams.gamma1}")
+        .action((x, c) => c.copy(gamma1 = x))
+      opt[Int]("gamma2")
+        .text(s"gamma2, default: ${defaultParams.gamma2}")
+        .action((x, c) => c.copy(gamma2 = x))
+      opt[Int]("gamma6")
+        .text(s"gamma6, default: ${defaultParams.gamma6}")
+        .action((x, c) => c.copy(gamma1 = x))
+      opt[Int]("gamma7")
+        .text(s"gamma7, default: ${defaultParams.gamma7}")
+        .action((x, c) => c.copy(gamma1 = x))
       opt[String]("master")
         .text("local yarn-client or yarn-cluster")
         .action((x, c) => c.copy(master = x))
       arg[String]("<input>")
         .required()
-        .text("input paths to a MovieLens dataset of ratings")
+        .text("input paths to a dataset of ratings")
         .action((x, c) => c.copy(input = x))
     }
 
@@ -191,8 +201,25 @@ object SVDPlusPlus {
     } getOrElse {
       System.exit(1)
     }
-    val conf = new SparkConf().setAppName(s"MovieLensALS with $params")
-                              .setMaster(params.master)
-    val sc = new SparkContext(conf)*/
+
+    def run(params: Params) {
+      val conf = new SparkConf().setAppName(s"Svd++ with $params")
+        .setMaster(params.master)
+      val sc = new SparkContext(conf)
+
+      val edges = sc.textFile(params.input).map { line =>
+        val fields = line.split(",")
+        Edge(fields(0).toLong * 2, fields(1).toLong * 2 + 1, fields(2).toDouble)
+      }
+      val svdConf = new SVDPlusPlus.Conf(params.rank, params.maxIters,
+        params.minVal, params.maxVal, params.gamma1, params.gamma2, params.gamma6, params.gamma7)
+      var (graph, u) = SVDPlusPlus.run(edges, svdConf)
+      graph.cache()
+      val err = graph.vertices.collect().map{ case (vid, vd) =>
+        if (vid % 2 == 1) vd._4 else 0.0
+      }.reduce(_ + _) / graph.triplets.collect().size
+      println(err)
+    }
+
   }
 }
